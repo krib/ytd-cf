@@ -1,9 +1,6 @@
-import { fetch } from 'undici';
-import { TextEncoder, TextDecoder } from 'util';
-
 // Configuration - using environment variables from Cloudflare
-const YOUTUBE_CHANNEL_ID = ENV.YOUTUBE_CHANNEL_ID || '';
-const DISCORD_WEBHOOK_URL = ENV.DISCORD_WEBHOOK_URL || '';
+const YOUTUBE_CHANNEL_ID = typeof ENV !== 'undefined' ? ENV.YOUTUBE_CHANNEL_ID || '' : '';
+const DISCORD_WEBHOOK_URL = typeof ENV !== 'undefined' ? ENV.DISCORD_WEBHOOK_URL || '' : '';
 
 // YouTube RSS URL
 const RSS_URL = "https://www.youtube.com/feeds/videos.xml";
@@ -61,6 +58,7 @@ async function fetchLatestVideos(channelId, maxResults = 5) {
     }
     
     const xmlText = await response.text();
+    // Parse XML using DOMParser (available in Cloudflare Workers)
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(xmlText, "text/xml");
     

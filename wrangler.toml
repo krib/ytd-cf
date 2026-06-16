@@ -1,6 +1,7 @@
 name = "youtube-discord-bot"
 main = "index.js"
 compatibility_date = "2023-12-01"
+compatibility_flags = ["nodejs_compat_v2"]
 
 # Variables for environment configuration
 [vars]
@@ -8,5 +9,5 @@ YOUTUBE_CHANNEL_ID = ""
 DISCORD_WEBHOOK_URL = ""
 
 # Environment-specific configuration
-[[triggers]]
+[[cron]]
 cron = "*/5 * * * *"

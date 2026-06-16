@@ -1,0 +1,8 @@
+# Environment variables for local development of YouTube Discord Bot
+# Copy this file to .dev.vars and fill in your actual values
+
+# YouTube Channel ID (required)
+YOUTUBE_CHANNEL_ID=
+
+# Discord Webhook URL (required)
+DISCORD_WEBHOOK_URL=
