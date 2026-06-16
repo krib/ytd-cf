@@ -160,6 +160,11 @@ export default {
     ctx.waitUntil(handleScheduled(event, env));
   },
   
+  async fetch(request, env, ctx) {
+    // Run the main logic when the worker is invoked directly
+    return await handleScheduled({cron: '* * * * *'}, env);
+  },
+  
   async handleScheduled(event, env) {
     try {
       console.log('Checking for new YouTube videos...');
