@@ -9,5 +9,5 @@ YOUTUBE_CHANNEL_ID = ""
 DISCORD_WEBHOOK_URL = ""
 
 # Environment-specific configuration
-[[triggers]]
+[triggers]
 crons = ["*/5 * * * *"]
