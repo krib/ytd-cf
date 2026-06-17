@@ -1,6 +1,10 @@
+// Import fast-xml-parser for XML parsing in Node.js environment
+import { XMLParser } from 'fast-xml-parser';
+
 // Configuration - using environment variables from Cloudflare
-const YOUTUBE_CHANNEL_ID = typeof ENV !== 'undefined' ? ENV.YOUTUBE_CHANNEL_ID || '' : '';
-const DISCORD_WEBHOOK_URL = typeof ENV !== 'undefined' ? ENV.DISCORD_WEBHOOK_URL || '' : '';
+// We'll get these from the env parameter in functions, but define defaults here for clarity
+const DEFAULT_YOUTUBE_CHANNEL_ID = '';
+const DEFAULT_DISCORD_WEBHOOK_URL = '';
 
 // YouTube RSS URL
 const RSS_URL = "https://www.youtube.com/feeds/videos.xml";
@@ -13,22 +17,35 @@ let seenVideos = new Set();
 
 // Helper function to check if a video is live
 async function isLiveBroadcast(videoId) {
+  console.debug(`Checking if video ${videoId} is live...`);
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 seconds timeout
+    
     const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
       headers: {
         'User-Agent': 'Mozilla/5.0'
       },
-      timeout: 10000 // 10 seconds timeout
+      signal: controller.signal
     });
     
+    clearTimeout(timeoutId);
+    
     if (!response.ok) {
+      console.warn(`Failed to fetch video ${videoId} - status: ${response.status}`);
       return false;
     }
     
     const text = await response.text();
-    return text.includes('"isLiveBroadcast":true') || text.includes('"isLiveContent":true');
+    const isLive = text.includes('"isLiveBroadcast":true') || text.includes('"isLiveContent":true');
+    console.log(`Video ${videoId} live check result: ${isLive}`);
+    return isLive;
   } catch (error) {
-    console.warn(`Failed to check video ${videoId}, assuming not live`, error);
+    if (error.name === 'AbortError') {
+      console.warn(`Timeout while checking video ${videoId}`);
+    } else {
+      console.warn(`Failed to check video ${videoId}, assuming not live`, error);
+    }
     return false;
   }
 }
@@ -46,34 +63,50 @@ class VideoItem {
 }
 
 // Function to fetch latest videos from YouTube RSS feed
-async function fetchLatestVideos(channelId, maxResults = 5) {
+async function fetchLatestVideos(channelId, maxResults = 2) {
+  console.log(`Fetching latest videos for channel: ${channelId}`);
   try {
     const params = new URLSearchParams({ channel_id: channelId });
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 seconds timeout
+    
     const response = await fetch(`${RSS_URL}?${params}`, {
-      timeout: 10000 // 10 seconds timeout
+      signal: controller.signal
     });
+    
+    clearTimeout(timeoutId);
     
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     
     const xmlText = await response.text();
-    // Parse XML using DOMParser (available in Cloudflare Workers)
-    const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+    console.log(`Received XML response, length: ${xmlText.length} characters`);
     
-    const entries = xmlDoc.getElementsByTagName("entry");
+    // Parse XML using fast-xml-parser to avoid MessagePort issues
+    const parser = new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: "",
+      textNodeName: "#text"
+    });
+    const parsedData = parser.parse(xmlText);
+    const entries = parsedData.feed.entry || [];
+    console.debug(`Found ${entries.length} entries in RSS feed`);
     const videos = [];
     
     for (let i = 0; i < Math.min(maxResults, entries.length); i++) {
       const entry = entries[i];
       
       // Extract video ID
-      const videoId = entry.querySelector('yt\\:videoId')?.textContent || '';
-      if (!videoId) continue;
+      const videoId = entry['yt:videoId'] || '';
+      if (!videoId) {
+        console.debug(`Skipping entry with no video ID`);
+        continue;
+      }
       
       // Extract title
-      const title = entry.querySelector('atom\\:title')?.textContent || '';
+      const title = entry.title || '';
       
       // Skip live streams based on title
       if (LIVE_TITLE.test(title)) {
@@ -88,16 +121,16 @@ async function fetchLatestVideos(channelId, maxResults = 5) {
       }
       
       // Extract published date
-      const publishedRaw = entry.querySelector('atom\\:published')?.textContent || '';
+      const publishedRaw = entry.published || '';
       const publishedAt = new Date(publishedRaw);
       
       // Extract channel title
-      const author = entry.querySelector('atom\\:author atom\\:name');
-      const channelTitle = author ? author.textContent : '';
+      const author = entry.author?.name;
+      const channelTitle = author ? author : '';
       
       // Extract thumbnail URL
-      const thumbnail = entry.querySelector('media\\:group media\\:thumbnail');
-      const thumbnailUrl = thumbnail ? thumbnail.getAttribute('url') : '';
+      const thumbnail = entry['media:group']?.['media:thumbnail'];
+      const thumbnailUrl = thumbnail ? thumbnail.url : '';
       
       videos.push(new VideoItem(
         videoId,
@@ -117,7 +150,7 @@ async function fetchLatestVideos(channelId, maxResults = 5) {
 }
 
 // Function to send message to Discord webhook
-async function sendDiscordMessage(video) {
+async function sendDiscordMessage(video, env) {
   try {
     const payload = {
       content: '',
@@ -135,13 +168,19 @@ async function sendDiscordMessage(video) {
       }]
     };
     
-    const response = await fetch(DISCORD_WEBHOOK_URL, {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 seconds timeout
+    
+    const response = await fetch(env.DISCORD_WEBHOOK_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: controller.signal
     });
+    
+    clearTimeout(timeoutId);
     
     if (!response.ok) {
       throw new Error(`Discord webhook failed with status ${response.status}`);
@@ -149,56 +188,75 @@ async function sendDiscordMessage(video) {
     
     console.info(`Posted: ${video.title}`);
   } catch (error) {
-    console.error('Error sending Discord message:', error);
+    if (error.name === 'AbortError') {
+      console.warn('Timeout while sending Discord message');
+    } else {
+      console.error('Error sending Discord message:', error);
+    }
     throw error;
   }
 }
 
 // Main function that runs on cron schedule
+async function handleScheduled(env) {
+  try {
+    console.log('Starting scheduled processing...');
+    console.log(`Environment variables - Channel ID: ${env.YOUTUBE_CHANNEL_ID ? 'Set' : 'Not set'}, Webhook URL: ${env.DISCORD_WEBHOOK_URL ? 'Set' : 'Not set'}`);
+    
+    // Validate configuration
+    if (!env.YOUTUBE_CHANNEL_ID || !env.DISCORD_WEBHOOK_URL) {
+      console.error('ERROR: Missing required environment variables');
+      throw new Error('Missing required environment variables: YOUTUBE_CHANNEL_ID and DISCORD_WEBHOOK_URL');
+    }
+    
+    console.log('Configuration validated successfully');
+    
+    // Fetch latest videos
+    const videos = await fetchLatestVideos(env.YOUTUBE_CHANNEL_ID);
+    console.log(`Fetched ${videos.length} videos from YouTube`);
+    
+    // Filter out already seen videos
+    const newVideos = videos.filter(video => !seenVideos.has(video.id));
+    console.log(`Found ${newVideos.length} new videos`);
+    
+    if (newVideos.length === 0) {
+      console.log('No new videos found');
+      return;
+    }
+    
+    // Mark new videos as seen
+    for (const video of newVideos) {
+      seenVideos.add(video.id);
+    }
+    console.log(`Marked ${newVideos.length} videos as seen`);
+    
+    // Send messages to Discord
+    console.log('Sending messages to Discord...');
+    for (const video of newVideos) {
+      await sendDiscordMessage(video, env);
+    }
+    
+    console.log(`Successfully processed ${newVideos.length} new videos`);
+  } catch (error) {
+    console.error('Error in scheduled function:', error);
+    throw error;
+  }
+}
+
 export default {
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(handleScheduled(event, env));
+    console.log('Scheduled event triggered');
+    // Run the main logic when the worker is invoked by the cron trigger
+    await handleScheduled(env);
+    // Return a simple response to satisfy Cloudflare Worker requirements
+    return new Response('Processed YouTube videos successfully');
   },
   
   async fetch(request, env, ctx) {
+    console.log('Direct fetch request received');
     // Run the main logic when the worker is invoked directly
-    return await handleScheduled({cron: '* * * * *'}, env);
-  },
-  
-  async handleScheduled(event, env) {
-    try {
-      console.log('Checking for new YouTube videos...');
-      
-      // Validate configuration
-      if (!YOUTUBE_CHANNEL_ID || !DISCORD_WEBHOOK_URL) {
-        throw new Error('Missing required environment variables: YOUTUBE_CHANNEL_ID and DISCORD_WEBHOOK_URL');
-      }
-      
-      // Fetch latest videos
-      const videos = await fetchLatestVideos(YOUTUBE_CHANNEL_ID);
-      
-      // Filter out already seen videos
-      const newVideos = videos.filter(video => !seenVideos.has(video.id));
-      
-      if (newVideos.length === 0) {
-        console.log('No new videos found');
-        return;
-      }
-      
-      // Mark new videos as seen
-      for (const video of newVideos) {
-        seenVideos.add(video.id);
-      }
-      
-      // Send messages to Discord
-      for (const video of newVideos) {
-        await sendDiscordMessage(video);
-      }
-      
-      console.log(`Successfully processed ${newVideos.length} new videos`);
-    } catch (error) {
-      console.error('Error in scheduled function:', error);
-      throw error;
-    }
+    await handleScheduled(env);
+    // Return a simple response to satisfy Cloudflare Worker requirements
+    return new Response('Processed YouTube videos successfully');
   }
 };
