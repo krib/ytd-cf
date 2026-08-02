@@ -223,7 +223,7 @@ async function handleScheduled(env) {
     console.log(`Fetched ${videos.length} videos from YouTube`);
     
     // Filter out already seen videos
-    const newVideos = videos.filter(video => !seenVideoSeen(video.id));
+    const newVideos = videos.filter(video => !isVideoSeen(video.id));
     console.log(`Found ${newVideos.length} new videos`);
     
     if (newVideos.length === 0) {
