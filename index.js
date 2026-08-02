@@ -12,9 +12,6 @@ const RSS_URL = "https://www.youtube.com/feeds/videos.xml";
 // Regular expression for live stream titles
 const LIVE_TITLE = /^[🔴🟡🟢🔵🟣⏺▪️]\s*(LIVE|PREMIERE|STREAM|首播|生放送)/i;
 
-// In-memory storage for seen videos (in production, you'd want to use Durable Objects or KV)
-let seenVideos = new Set();
-
 // Helper function to check if a video is live
 async function isLiveBroadcast(videoId) {
   console.debug(`Checking if video ${videoId} is live...`);
@@ -197,6 +194,16 @@ async function sendDiscordMessage(video, env) {
   }
 }
 
+// Replace in-memory tracking with KV storage
+async function isVideoSeen(videoId) {
+  const seen = await SEEN_VIDEOS.get(`seen:${videoId}`);
+  return seen !== null;
+}
+
+async function markVideoAsSeen(videoId) {
+  await SEEN_VIDEOS.put(`seen:${videoId}`, 'true');
+}
+
 // Main function that runs on cron schedule
 async function handleScheduled(env) {
   try {
@@ -216,7 +223,7 @@ async function handleScheduled(env) {
     console.log(`Fetched ${videos.length} videos from YouTube`);
     
     // Filter out already seen videos
-    const newVideos = videos.filter(video => !seenVideos.has(video.id));
+    const newVideos = videos.filter(video => !seenVideoSeen(video.id));
     console.log(`Found ${newVideos.length} new videos`);
     
     if (newVideos.length === 0) {
@@ -226,7 +233,7 @@ async function handleScheduled(env) {
     
     // Mark new videos as seen
     for (const video of newVideos) {
-      seenVideos.add(video.id);
+      await markVideoAsSeen(video.id);
     }
     console.log(`Marked ${newVideos.length} videos as seen`);
     
